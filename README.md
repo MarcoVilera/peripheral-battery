@@ -10,10 +10,35 @@ dispositivo conectado: tipo, conexión, porcentaje, estado de carga y tiempo est
 - **Aviso de batería baja** con umbral configurable.
 - **Iniciar con Windows** y **actualizaciones automáticas** desde GitHub Releases.
 
-## Descarga
+## ⚠️ Microsoft Defender: falso positivo
 
-Instalador en [Releases](https://github.com/MarcoVilera/peripheral-battery/releases/latest).
-Ver [Code signing policy](#code-signing-policy) y [Privacidad](#privacidad).
+Al instalar o actualizar, Microsoft Defender puede detectar la app como
+**`Behavior:Win32/Persistence.A!ml`** y ponerla en cuarentena (borra `PeripheralBattery.exe`
+y la entrada de inicio con Windows).
+
+**Es un falso positivo.** `!ml` indica una detección heurística por *machine learning*, no
+una firma de malware conocido. La dispara la combinación de:
+
+- un ejecutable **sin firma digital** y sin historial de reputación (cada versión es un archivo nuevo),
+- instalado por usuario en `%LOCALAPPDATA%\Programs` (carpeta sin permisos de administrador),
+- que se registra para **iniciar con Windows** (`HKCU\...\CurrentVersion\Run`),
+
+que es el mismo patrón que usa el malware para quedarse en el sistema. El código completo
+está en este repositorio y el instalador se compila a partir de él.
+
+**Cómo permitirla:**
+
+1. Seguridad de Windows → *Protección contra virus y amenazas* → *Historial de protección*.
+2. Abrir la detección `Behavior:Win32/Persistence.A!ml` → *Acciones* → **Permitir en el dispositivo**
+   (o elegir *Allow on device* directamente en la alerta).
+3. Volver a instalar con el instalador de [Releases](https://github.com/MarcoVilera/peripheral-battery/releases/latest).
+
+Desmarcar *Iniciar con Windows* durante la instalación reduce la probabilidad de la detección,
+a cambio de tener que abrir la app a mano. Si vuelve a aparecer tras una actualización, se
+repiten los pasos. Los falsos positivos se pueden reportar a Microsoft en
+<https://www.microsoft.com/wdsi/filesubmission>.
+
+La solución definitiva sería firmar el ejecutable con un certificado de firma de código.
 
 ## Dispositivos soportados
 
@@ -36,27 +61,18 @@ software oficial del fabricante (muchos son apps Electron con el JS sin compilar
 ## Desarrollo
 
 ```powershell
-pip install -r requirements.txt
+pip install hidapi PySide6-Essentials pillow pyinstaller
 python battery.py   # lectura por consola
 python app.py       # app de bandeja
 ```
 
 ## Build e instalador
 
-Las versiones publicadas se compilan en GitHub Actions (`.github/workflows/build.yml`):
-al subir un tag `vX.Y.Z` (igual a `VERSION` en `version.py`) el workflow compila, firma
-con SignPath y publica el release.
+Requiere Inno Setup 6 (`winget install JRSoftware.InnoSetup`).
 
 ```powershell
-git tag v1.2.0
-git push origin v1.2.0
-```
-
-Build local (requiere Inno Setup 6, `winget install JRSoftware.InnoSetup`):
-
-```powershell
-pip install -r requirements.txt
-.\build.ps1           # genera dist\PeripheralBattery-<version>-setup.exe (sin firmar)
+.\build.ps1           # genera dist\PeripheralBattery-<version>-setup.exe
+.\build.ps1 -Release  # además publica el release en GitHub (requiere gh)
 ```
 
 ## Actualizaciones
@@ -65,9 +81,7 @@ La app revisa GitHub Releases al iniciar y cada 6 horas (`GITHUB_REPO` en `versi
 Si hay una versión mayor, descarga el instalador y lo corre en modo silencioso; el
 instalador cierra la app, reemplaza los archivos y la vuelve a abrir.
 
-Se puede desactivar en el panel: ⚙ → *Actualizar automáticamente*.
-
-Para publicar una versión nueva: subir `VERSION` en `version.py`, commitear y subir el tag.
+Para publicar una versión nueva: subir `VERSION` en `version.py` y correr `.\build.ps1 -Release`.
 
 ## Datos
 
@@ -78,28 +92,3 @@ En `%LOCALAPPDATA%\PeripheralBattery` (se borra al desinstalar):
 - `battery_stats.json`: velocidades de carga/descarga aprendidas.
 
 Los instaladores descargados por las actualizaciones se borran de `%TEMP%` al iniciar.
-
-## Privacidad
-
-Peripheral Battery no recopila ni envía datos personales ni de uso. La única conexión de red
-es la consulta de actualizaciones a la API pública de GitHub
-(`api.github.com/repos/MarcoVilera/peripheral-battery/releases/latest`) y, si hay una versión
-nueva, la descarga del instalador desde GitHub. Se hace al iniciar y cada 6 horas, y se puede
-desactivar en ⚙ → *Actualizar automáticamente*; con eso el programa no transfiere información
-a otros sistemas salvo que el usuario lo pida (botón *Buscar*). Ver la
-[política de privacidad de GitHub](https://docs.github.com/site-policy/privacy-policies/github-general-privacy-statement).
-
-## Code signing policy
-
-Free code signing provided by [SignPath.io](https://about.signpath.io/), certificate by
-[SignPath Foundation](https://signpath.org/).
-
-- Committers and reviewers: [MarcoVilera](https://github.com/MarcoVilera)
-- Approvers: [MarcoVilera](https://github.com/MarcoVilera)
-
-Los binarios firmados se compilan desde este repositorio con GitHub Actions; cada firma
-de una versión se aprueba manualmente.
-
-## Licencia
-
-[MIT](LICENSE)

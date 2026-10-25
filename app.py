@@ -60,9 +60,8 @@ class Worker(QObject):
     update_status = Signal(str)
     quit_for_update = Signal()
 
-    def __init__(self, settings):
+    def __init__(self):
         super().__init__()
-        self.settings = settings
         self.stop = threading.Event()
         self.refresh = threading.Event()
         self.fast = False  # True mientras el panel esta abierto
@@ -96,8 +95,7 @@ class Worker(QObject):
         # Primera revision al minuto de arrancar para no competir con el inicio de Windows.
         delay = 60
         while not self.stop.wait(delay):
-            if self.settings["auto_update"]:  # el usuario puede desactivarlo en Opciones
-                self.check_updates(manual=False)
+            self.check_updates(manual=False)
             delay = UPDATE_CHECK_S
 
     def check_updates(self, manual):
@@ -134,7 +132,7 @@ class TrayApp(QObject):
         self.low_warned = set()
         self.icon_state = None  # (tema claro, alerta) del icono actual de la bandeja
 
-        self.worker = Worker(self.settings)
+        self.worker = Worker()
         self.flyout = Flyout(self.settings, VERSION)
         self.tray = QSystemTrayIcon()
         self.refresh_tray_icon(False)
@@ -158,7 +156,6 @@ class TrayApp(QObject):
         self.worker.quit_for_update.connect(self.quit)
         self.flyout.autostart_toggled.connect(self.on_autostart)
         self.flyout.alert_toggled.connect(lambda v: self.settings.set("low_battery_alert", v))
-        self.flyout.auto_update_toggled.connect(lambda v: self.settings.set("auto_update", v))
         self.flyout.threshold_changed.connect(self.on_threshold)
         self.flyout.check_updates.connect(
             lambda: threading.Thread(target=self.worker.check_updates, args=(True,), daemon=True).start()

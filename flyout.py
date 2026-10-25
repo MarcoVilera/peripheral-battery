@@ -212,7 +212,6 @@ def _icon_button(glyph, tooltip, color):
 class Flyout(QWidget):
     autostart_toggled = Signal(bool)
     alert_toggled = Signal(bool)
-    auto_update_toggled = Signal(bool)
     threshold_changed = Signal(int)
     check_updates = Signal()
     quit_requested = Signal()
@@ -370,11 +369,6 @@ class Flyout(QWidget):
         card = self._setting_row("Actualizaciones", None, upd)
         card.layout().itemAt(0).layout().addWidget(self.update_label)
         lay.addWidget(card)
-
-        auto_upd = Toggle(self.pal)
-        auto_upd.setChecked(self.settings["auto_update"])
-        auto_upd.toggled.connect(self.auto_update_toggled)
-        lay.addWidget(self._setting_row("Actualizar automáticamente", "Consulta GitHub al iniciar y cada 6 h", auto_upd))
 
         foot = QHBoxLayout()
         foot.setContentsMargins(0, 6, 0, 0)

@@ -10,8 +10,6 @@ _FILE = DATA_DIR / "settings.json"
 DEFAULTS = {
     "low_battery_alert": True,
     "low_battery_threshold": 15,
-    # Consultar GitHub Releases solo; desactivable (politica de privacidad / SignPath).
-    "auto_update": True,
 }
 
 
