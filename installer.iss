@@ -12,7 +12,14 @@ AppId={{6F3B2A41-8C7E-4D52-9B1A-3E5C7D9F2A10}
 AppName={#AppName}
 AppVersion={#AppVersion}
 AppVerName={#AppName} {#AppVersion}
-AppPublisher=Marco
+AppPublisher=MarcoVilera
+AppPublisherURL=https://github.com/MarcoVilera/peripheral-battery
+; Metadatos del instalador (SignPath exige nombre de producto y version).
+VersionInfoVersion={#AppVersion}
+VersionInfoProductName={#AppName}
+VersionInfoProductVersion={#AppVersion}
+VersionInfoDescription={#AppName} Setup
+VersionInfoCompany=MarcoVilera
 ; Instalacion por usuario: no pide administrador, asi las actualizaciones son silenciosas.
 PrivilegesRequired=lowest
 DefaultDirName={localappdata}\Programs\PeripheralBattery

@@ -10,6 +10,11 @@ dispositivo conectado: tipo, conexión, porcentaje, estado de carga y tiempo est
 - **Aviso de batería baja** con umbral configurable.
 - **Iniciar con Windows** y **actualizaciones automáticas** desde GitHub Releases.
 
+## Descarga
+
+Instalador en [Releases](https://github.com/MarcoVilera/peripheral-battery/releases/latest).
+Ver [Code signing policy](#code-signing-policy) y [Privacidad](#privacidad).
+
 ## Dispositivos soportados
 
 | Dispositivo | Conexión | Driver |
@@ -31,18 +36,27 @@ software oficial del fabricante (muchos son apps Electron con el JS sin compilar
 ## Desarrollo
 
 ```powershell
-pip install hidapi PySide6-Essentials pillow pyinstaller
+pip install -r requirements.txt
 python battery.py   # lectura por consola
 python app.py       # app de bandeja
 ```
 
 ## Build e instalador
 
-Requiere Inno Setup 6 (`winget install JRSoftware.InnoSetup`).
+Las versiones publicadas se compilan en GitHub Actions (`.github/workflows/build.yml`):
+al subir un tag `vX.Y.Z` (igual a `VERSION` en `version.py`) el workflow compila, firma
+con SignPath y publica el release.
 
 ```powershell
-.\build.ps1           # genera dist\PeripheralBattery-<version>-setup.exe
-.\build.ps1 -Release  # además publica el release en GitHub (requiere gh)
+git tag v1.2.0
+git push origin v1.2.0
+```
+
+Build local (requiere Inno Setup 6, `winget install JRSoftware.InnoSetup`):
+
+```powershell
+pip install -r requirements.txt
+.\build.ps1           # genera dist\PeripheralBattery-<version>-setup.exe (sin firmar)
 ```
 
 ## Actualizaciones
@@ -51,7 +65,9 @@ La app revisa GitHub Releases al iniciar y cada 6 horas (`GITHUB_REPO` en `versi
 Si hay una versión mayor, descarga el instalador y lo corre en modo silencioso; el
 instalador cierra la app, reemplaza los archivos y la vuelve a abrir.
 
-Para publicar una versión nueva: subir `VERSION` en `version.py` y correr `.\build.ps1 -Release`.
+Se puede desactivar en el panel: ⚙ → *Actualizar automáticamente*.
+
+Para publicar una versión nueva: subir `VERSION` en `version.py`, commitear y subir el tag.
 
 ## Datos
 
@@ -62,3 +78,28 @@ En `%LOCALAPPDATA%\PeripheralBattery` (se borra al desinstalar):
 - `battery_stats.json`: velocidades de carga/descarga aprendidas.
 
 Los instaladores descargados por las actualizaciones se borran de `%TEMP%` al iniciar.
+
+## Privacidad
+
+Peripheral Battery no recopila ni envía datos personales ni de uso. La única conexión de red
+es la consulta de actualizaciones a la API pública de GitHub
+(`api.github.com/repos/MarcoVilera/peripheral-battery/releases/latest`) y, si hay una versión
+nueva, la descarga del instalador desde GitHub. Se hace al iniciar y cada 6 horas, y se puede
+desactivar en ⚙ → *Actualizar automáticamente*; con eso el programa no transfiere información
+a otros sistemas salvo que el usuario lo pida (botón *Buscar*). Ver la
+[política de privacidad de GitHub](https://docs.github.com/site-policy/privacy-policies/github-general-privacy-statement).
+
+## Code signing policy
+
+Free code signing provided by [SignPath.io](https://about.signpath.io/), certificate by
+[SignPath Foundation](https://signpath.org/).
+
+- Committers and reviewers: [MarcoVilera](https://github.com/MarcoVilera)
+- Approvers: [MarcoVilera](https://github.com/MarcoVilera)
+
+Los binarios firmados se compilan desde este repositorio con GitHub Actions; cada firma
+de una versión se aprueba manualmente.
+
+## Licencia
+
+[MIT](LICENSE)

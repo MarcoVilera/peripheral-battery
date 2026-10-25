@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Configuracion "installer" en SignPath: firma el instalador de Inno Setup que sube
+     el workflow (GitHub lo empaqueta como ZIP). -->
+<artifact-configuration xmlns="http://signpath.io/artifact-configuration/v1">
+  <parameters>
+    <parameter name="version" default-value="0.0.0" />
+  </parameters>
+  <zip-file>
+    <pe-file path="PeripheralBattery-${version}-setup.exe" product-name="Peripheral Battery" product-version="${version}">
+      <authenticode-sign />
+    </pe-file>
+  </zip-file>
+</artifact-configuration>
