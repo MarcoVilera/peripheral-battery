@@ -46,7 +46,12 @@ Source: "dist\PeripheralBattery\*"; DestDir: "{app}"; Flags: ignoreversion recur
 Name: "{autoprograms}\{#AppName}"; Filename: "{app}\{#AppExe}"
 
 [Registry]
-Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "PeripheralBattery"; ValueData: """{app}\{#AppExe}"""; Flags: uninsdeletevalue; Tasks: autostart
+; El autoarranque tambien se cambia desde el menu de la app, asi que solo lo toca la
+; instalacion interactiva: las actualizaciones (silenciosas) respetan lo que eligio el usuario.
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "PeripheralBattery"; ValueData: """{app}\{#AppExe}"""; Tasks: autostart; Check: not WizardSilent
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: none; ValueName: "PeripheralBattery"; Flags: deletevalue; Tasks: not autostart; Check: not WizardSilent
+; Siempre registrar el borrado al desinstalar, aunque se haya activado desde la app.
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: none; ValueName: "PeripheralBattery"; Flags: uninsdeletevalue
 
 [Run]
 ; Instalacion normal: casilla "Iniciar" al final. Actualizacion silenciosa: se relanza sola.

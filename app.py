@@ -4,6 +4,7 @@ import logging
 import os
 import sys
 import threading
+import winreg
 from pathlib import Path
 
 import pystray
@@ -26,6 +27,30 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(message)s",
 )
 log = logging.getLogger("app")
+
+
+RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
+RUN_VALUE = "PeripheralBattery"  # mismo nombre que usa installer.iss
+
+
+def autostart_enabled():
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY) as k:
+            winreg.QueryValueEx(k, RUN_VALUE)
+        return True
+    except OSError:
+        return False
+
+
+def set_autostart(enabled):
+    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_SET_VALUE) as k:
+        if enabled:
+            winreg.SetValueEx(k, RUN_VALUE, 0, winreg.REG_SZ, f'"{sys.executable}"')
+        else:
+            try:
+                winreg.DeleteValue(k, RUN_VALUE)
+            except FileNotFoundError:
+                pass
 
 
 def single_instance():
@@ -74,6 +99,13 @@ class App:
             pystray.MenuItem(lambda _: tray.text, None, enabled=False),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("Actualizar lectura", self.on_refresh, default=True),
+            pystray.MenuItem(
+                "Iniciar con Windows",
+                self.on_toggle_autostart,
+                checked=lambda _: autostart_enabled(),
+                # Desde el codigo fuente sys.executable es python.exe: solo tiene sentido instalada.
+                visible=getattr(sys, "frozen", False),
+            ),
             pystray.MenuItem(
                 "Buscar actualizaciones", self.on_check_updates, visible=bool(GITHUB_REPO)
             ),
@@ -176,6 +208,17 @@ class App:
 
     def on_refresh(self, *_):
         self.refresh_event.set()
+
+    def on_toggle_autostart(self, *_):
+        enabled = not autostart_enabled()
+        try:
+            set_autostart(enabled)
+            log.info("Iniciar con Windows: %s", enabled)
+        except OSError:
+            log.exception("No se pudo cambiar el inicio con Windows")
+        for tray in [*self.icons.values(), self.placeholder]:
+            if tray:
+                tray.icon.update_menu()
 
     def on_check_updates(self, *_):
         threading.Thread(target=self.try_update, args=(True,), daemon=True).start()
