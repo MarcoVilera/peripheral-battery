@@ -1,249 +1,252 @@
-"""Peripheral Battery: un icono en la bandeja por cada dispositivo conectado con su bateria."""
-import ctypes
+"""Peripheral Battery: icono en la bandeja con un panel que muestra la bateria de cada dispositivo."""
 import logging
-import os
+import logging.handlers
 import sys
 import threading
-import winreg
-from pathlib import Path
+import time
 
-import pystray
+from PySide6.QtCore import QObject, Signal
+from PySide6.QtGui import QAction
+from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
 import icons
+import system
 import updater
 from devices import DRIVERS, DeviceError
+from estimator import Estimator, format_estimate
+from flyout import Flyout
+from settings import DATA_DIR, Settings
 from version import GITHUB_REPO, VERSION
 
 APP_NAME = "Peripheral Battery"
 POLL_S = 60
+POLL_OPEN_S = 1  # mientras el panel esta abierto: casi tiempo real
 UPDATE_CHECK_S = 6 * 60 * 60
-LOW_BATTERY = 15
+CLICK_REOPEN_GUARD_S = 0.3
 
-LOG_DIR = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "PeripheralBattery"
-LOG_DIR.mkdir(parents=True, exist_ok=True)
-logging.basicConfig(
-    filename=LOG_DIR / "app.log",
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(message)s",
+# Log con rotacion: como maximo ~512 KB en disco (app.log + app.log.1).
+_handler = logging.handlers.RotatingFileHandler(
+    DATA_DIR / "app.log", maxBytes=256 * 1024, backupCount=1, encoding="utf-8"
 )
+_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+logging.basicConfig(level=logging.INFO, handlers=[_handler])
 log = logging.getLogger("app")
 
 
-RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
-RUN_VALUE = "PeripheralBattery"  # mismo nombre que usa installer.iss
+def read_all():
+    """Lee todos los drivers. Devuelve la lista de dispositivos presentes como dicts."""
+    out = []
+    for drv in DRIVERS:
+        base = {"id": drv.id, "name": drv.name, "kind": drv.kind}
+        try:
+            st = drv.read()
+        except DeviceError as e:
+            out.append({**base, "error": str(e)})
+            continue
+        except Exception as e:
+            log.exception("Error leyendo %s", drv.id)
+            out.append({**base, "error": f"Error: {e}"})
+            continue
+        if st is not None:
+            out.append({**base, "pct": st.pct, "charging": st.charging, "connection": st.connection})
+    return out
 
 
-def autostart_enabled():
-    try:
-        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY) as k:
-            winreg.QueryValueEx(k, RUN_VALUE)
-        return True
-    except OSError:
-        return False
+class Worker(QObject):
+    """Hilos de lectura y de actualizaciones; se comunican con la UI por señales."""
 
+    devices = Signal(list)
+    notify = Signal(str)
+    update_status = Signal(str)
+    quit_for_update = Signal()
 
-def set_autostart(enabled):
-    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_SET_VALUE) as k:
-        if enabled:
-            winreg.SetValueEx(k, RUN_VALUE, 0, winreg.REG_SZ, f'"{sys.executable}"')
-        else:
-            try:
-                winreg.DeleteValue(k, RUN_VALUE)
-            except FileNotFoundError:
-                pass
-
-
-def single_instance():
-    """Evita dos instancias a la vez (por ejemplo, al relanzarse tras una actualizacion)."""
-    ctypes.windll.kernel32.CreateMutexW(None, False, "Local\\PeripheralBatteryTray")
-    return ctypes.windll.kernel32.GetLastError() != 183  # ERROR_ALREADY_EXISTS
-
-
-class TrayIcon:
-    """Un icono de bandeja con su propio hilo (pystray necesita un loop por icono)."""
-
-    def __init__(self, app, key, text):
-        self.text = text
-        self.icon = pystray.Icon(key, icons.render(None), text[:127], menu=app.build_menu(self))
-        threading.Thread(target=self.icon.run, args=(self._setup,), daemon=True).start()
-
-    @staticmethod
-    def _setup(icon):
-        icon.visible = True
-
-    def set(self, pct, charging, text):
-        self.icon.icon = icons.render(pct, charging)
-        self.icon.title = text[:127]
-        if text != self.text:
-            self.text = text
-            self.icon.update_menu()
-
-    def notify(self, msg):
-        self.icon.notify(msg, APP_NAME)
-
-    def stop(self):
-        self.icon.stop()
-
-
-class App:
     def __init__(self):
-        self.stop_event = threading.Event()
-        self.refresh_event = threading.Event()
-        self.icons = {}  # driver.id -> TrayIcon
-        self.placeholder = None  # icono gris cuando no hay ningun dispositivo
-        self.low_warned = set()
-        self.last_log = {}
+        super().__init__()
+        self.stop = threading.Event()
+        self.refresh = threading.Event()
+        self.fast = False  # True mientras el panel esta abierto
+        self.estimator = Estimator()
 
-    def build_menu(self, tray):
-        return pystray.Menu(
-            pystray.MenuItem(lambda _: tray.text, None, enabled=False),
-            pystray.Menu.SEPARATOR,
-            pystray.MenuItem("Actualizar lectura", self.on_refresh, default=True),
-            pystray.MenuItem(
-                "Iniciar con Windows",
-                self.on_toggle_autostart,
-                checked=lambda _: autostart_enabled(),
-                # Desde el codigo fuente sys.executable es python.exe: solo tiene sentido instalada.
-                visible=getattr(sys, "frozen", False),
-            ),
-            pystray.MenuItem(
-                "Buscar actualizaciones", self.on_check_updates, visible=bool(GITHUB_REPO)
-            ),
-            pystray.MenuItem(f"{APP_NAME} {VERSION}", None, enabled=False),
-            pystray.Menu.SEPARATOR,
-            pystray.MenuItem("Salir", self.on_quit),
-        )
+    def start(self):
+        threading.Thread(target=self._poll_loop, daemon=True).start()
+        if GITHUB_REPO:
+            threading.Thread(target=self._update_loop, daemon=True).start()
 
-    def any_icon(self):
-        return next(iter(self.icons.values()), self.placeholder)
+    def _poll_loop(self):
+        last = None
+        while not self.stop.is_set():
+            devs = read_all()
+            for d in devs:
+                if "pct" in d:
+                    hours = self.estimator.update(d["id"], d["pct"], d["charging"])
+                    d["estimate"] = format_estimate(hours, d["charging"])
+            summary = "; ".join(
+                f"{d['name']}: " + (d["error"] if "error" in d else f"{d['pct']}%" + (" (cargando)" if d["charging"] else ""))
+                for d in devs
+            ) or "Ningún dispositivo"
+            if summary != last:
+                log.info(summary)
+                last = summary
+            self.devices.emit(devs)
+            self.refresh.wait(POLL_OPEN_S if self.fast else POLL_S)
+            self.refresh.clear()
 
-    # --- lectura de baterias ---
-
-    def poll_once(self):
-        for drv in DRIVERS:
-            try:
-                st = drv.read()
-            except DeviceError as e:
-                self.show(drv, None, False, f"{drv.name}: {e}")
-                continue
-            except Exception as e:
-                log.exception("Error leyendo %s", drv.id)
-                self.show(drv, None, False, f"{drv.name}: error ({e})")
-                continue
-            if st is None:
-                self.hide(drv)
-                continue
-            text = f"{drv.name}: {st.pct}%" + (" (cargando)" if st.charging else "")
-            self.show(drv, st.pct, st.charging, text)
-            self.check_low(drv, st.pct, st.charging)
-
-        if self.icons and self.placeholder:
-            self.placeholder.stop()
-            self.placeholder = None
-        elif not self.icons and not self.placeholder:
-            self.placeholder = TrayIcon(self, "none", "Ningun dispositivo conectado")
-
-    def show(self, drv, pct, charging, text):
-        if self.last_log.get(drv.id) != text:
-            log.info(text)
-            self.last_log[drv.id] = text
-        tray = self.icons.get(drv.id)
-        if tray is None:
-            tray = self.icons[drv.id] = TrayIcon(self, drv.id, text)
-        tray.set(pct, charging, text)
-
-    def hide(self, drv):
-        tray = self.icons.pop(drv.id, None)
-        if tray:
-            log.info("%s desconectado", drv.name)
-            self.last_log.pop(drv.id, None)
-            tray.stop()
-
-    def check_low(self, drv, pct, charging):
-        if charging or pct > LOW_BATTERY + 5:
-            self.low_warned.discard(drv.id)
-        elif pct <= LOW_BATTERY and drv.id not in self.low_warned:
-            self.low_warned.add(drv.id)
-            self.icons[drv.id].notify(f"A {drv.name} le queda {pct}% de bateria.")
-
-    # --- actualizaciones ---
-
-    def update_loop(self):
-        if not GITHUB_REPO:
-            return
+    def _update_loop(self):
         # Primera revision al minuto de arrancar para no competir con el inicio de Windows.
         delay = 60
-        while not self.stop_event.wait(delay):
-            self.try_update(manual=False)
+        while not self.stop.wait(delay):
+            self.check_updates(manual=False)
             delay = UPDATE_CHECK_S
 
-    def try_update(self, manual):
-        def notify(msg):
-            if tray := self.any_icon():
-                tray.notify(msg)
-
+    def check_updates(self, manual):
+        if manual:
+            self.update_status.emit("Buscando...")
         try:
             found = updater.check()
         except Exception:
             log.exception("Error buscando actualizaciones")
-            if manual:
-                notify("No se pudo buscar actualizaciones.")
+            self.update_status.emit("No se pudo buscar actualizaciones")
             return
         if not found:
-            if manual:
-                notify(f"Ya tienes la ultima version ({VERSION}).")
+            self.update_status.emit(f"Versión {VERSION} · al día")
             return
         new_version, url = found
         log.info("Actualizando a %s desde %s", new_version, url)
-        notify(f"Instalando la version {new_version}...")
+        self.update_status.emit(f"Instalando {new_version}...")
+        self.notify.emit(f"Instalando la versión {new_version}...")
         try:
             updater.download_and_install(url)
         except Exception:
             log.exception("Error instalando la actualizacion")
-            notify("No se pudo instalar la actualizacion.")
+            self.update_status.emit("No se pudo instalar la actualización")
             return
-        self.on_quit()
+        self.quit_for_update.emit()
 
-    # --- menu ---
 
-    def on_refresh(self, *_):
-        self.refresh_event.set()
+class TrayApp(QObject):
+    def __init__(self, qapp):
+        super().__init__()
+        self.qapp = qapp
+        self.settings = Settings()
+        self.devices = []
+        self.low_warned = set()
+        self.icon_state = None  # (tema claro, alerta) del icono actual de la bandeja
 
-    def on_toggle_autostart(self, *_):
-        enabled = not autostart_enabled()
-        try:
-            set_autostart(enabled)
-            log.info("Iniciar con Windows: %s", enabled)
-        except OSError:
-            log.exception("No se pudo cambiar el inicio con Windows")
-        for tray in [*self.icons.values(), self.placeholder]:
-            if tray:
-                tray.icon.update_menu()
+        self.worker = Worker()
+        self.flyout = Flyout(self.settings, VERSION)
+        self.tray = QSystemTrayIcon()
+        self.refresh_tray_icon(False)
+        self.tray.setToolTip(APP_NAME)
+        self.tray.activated.connect(self.on_activated)
 
-    def on_check_updates(self, *_):
-        threading.Thread(target=self.try_update, args=(True,), daemon=True).start()
+        menu = QMenu()
+        open_action = QAction("Abrir", menu)
+        open_action.triggered.connect(self.open_flyout)
+        quit_action = QAction("Salir", menu)
+        quit_action.triggered.connect(self.quit)
+        menu.addAction(open_action)
+        menu.addSeparator()
+        menu.addAction(quit_action)
+        self.tray.setContextMenu(menu)
+        self.menu = menu  # referencia para que Qt no lo destruya
 
-    def on_quit(self, *_):
-        self.stop_event.set()
-        self.refresh_event.set()
+        self.worker.devices.connect(self.on_devices)
+        self.worker.notify.connect(self.notify)
+        self.worker.update_status.connect(self.flyout.set_update_status)
+        self.worker.quit_for_update.connect(self.quit)
+        self.flyout.autostart_toggled.connect(self.on_autostart)
+        self.flyout.alert_toggled.connect(lambda v: self.settings.set("low_battery_alert", v))
+        self.flyout.threshold_changed.connect(self.on_threshold)
+        self.flyout.check_updates.connect(
+            lambda: threading.Thread(target=self.worker.check_updates, args=(True,), daemon=True).start()
+        )
+        self.flyout.quit_requested.connect(self.quit)
+        self.flyout.visibility_changed.connect(self.on_flyout_visible)
 
     def run(self):
         log.info("Inicio %s %s", APP_NAME, VERSION)
-        threading.Thread(target=self.update_loop, daemon=True).start()
-        while not self.stop_event.is_set():
-            self.poll_once()
-            self.refresh_event.wait(POLL_S)
-            self.refresh_event.clear()
-        for tray in [*self.icons.values(), self.placeholder]:
-            if tray:
-                tray.stop()
+        updater.cleanup_installers()
+        self.tray.show()
+        self.worker.start()
+        return self.qapp.exec()
+
+    # --- datos ---
+
+    def on_devices(self, devices):
+        self.devices = devices
+        self.flyout.set_devices(devices)
+        threshold = self.settings["low_battery_threshold"]
+        any_low = False
+        for d in devices:
+            if "pct" not in d:
+                continue
+            low = d["pct"] <= threshold and not d["charging"]
+            any_low |= low
+            if d["charging"] or d["pct"] > threshold + 5:  # margen para no repetir el aviso
+                self.low_warned.discard(d["id"])
+            elif low and d["id"] not in self.low_warned and self.settings["low_battery_alert"]:
+                self.low_warned.add(d["id"])
+                self.notify(f"A {d['name']} le queda {d['pct']}% de batería.")
+        self.refresh_tray_icon(any_low)
+
+    def refresh_tray_icon(self, alert):
+        # Solo se regenera si cambio algo: con el panel abierto esto corre cada segundo.
+        state = (system.taskbar_is_light(), alert)
+        if state != self.icon_state:
+            self.icon_state = state
+            self.tray.setIcon(icons.tray_icon(*state))
+
+    def notify(self, msg):
+        self.tray.showMessage(APP_NAME, msg, QSystemTrayIcon.Information, 5000)
+
+    # --- panel ---
+
+    def on_activated(self, reason):
+        if reason != QSystemTrayIcon.Trigger:
+            return
+        if self.flyout.isVisible():
+            self.flyout.close_flyout()
+        elif time.monotonic() - self.flyout.last_hidden < CLICK_REOPEN_GUARD_S:
+            # El clic en el icono ya cerro el panel al quitarle el foco: no reabrir.
+            pass
+        else:
+            self.open_flyout()
+
+    def open_flyout(self):
+        self.flyout.open()
+
+    def on_flyout_visible(self, visible):
+        self.worker.fast = visible
+        if visible:
+            self.worker.refresh.set()  # lectura fresca al abrir
+
+    # --- opciones ---
+
+    def on_autostart(self, enabled):
+        try:
+            system.set_autostart(enabled)
+            log.info("Iniciar con Windows: %s", enabled)
+        except OSError:
+            log.exception("No se pudo cambiar el inicio con Windows")
+
+    def on_threshold(self, value):
+        self.settings.set("low_battery_threshold", value)
+        self.low_warned.clear()
+        self.on_devices(self.devices)
+
+    def quit(self):
+        self.worker.stop.set()
+        self.worker.refresh.set()
+        self.tray.hide()
+        self.qapp.quit()
 
 
 def main():
-    if not single_instance():
+    if not system.single_instance():
         return 0
-    App().run()
-    return 0
+    qapp = QApplication(sys.argv)
+    qapp.setQuitOnLastWindowClosed(False)
+    return TrayApp(qapp).run()
 
 
 if __name__ == "__main__":

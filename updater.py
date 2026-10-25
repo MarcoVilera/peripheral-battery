@@ -38,6 +38,21 @@ def check():
     return None
 
 
+INSTALLER_GLOB = "PeripheralBattery-*-setup.exe"
+
+
+def cleanup_installers():
+    """Borra instaladores de actualizaciones anteriores que quedaron en %TEMP%.
+
+    Se llama al iniciar: si la app esta corriendo, el instalador que la relanzo ya termino.
+    """
+    for f in Path(tempfile.gettempdir()).glob(INSTALLER_GLOB):
+        try:
+            f.unlink()
+        except OSError:
+            pass  # en uso o sin permisos: se reintenta en el proximo inicio
+
+
 def download_and_install(url):
     """Descarga el instalador y lo lanza en modo silencioso.
 

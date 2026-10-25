@@ -1,41 +1,39 @@
-"""Dibuja el icono de la bandeja: el porcentaje sobre un fondo segun el nivel."""
-from PIL import Image, ImageDraw, ImageFont
+"""Iconos: el de la bandeja (Qt) y el del ejecutable/instalador (PIL -> .ico)."""
+from PIL import Image, ImageDraw
 
-SIZE = 64
-GREEN, YELLOW, RED = (22, 163, 74), (202, 138, 4), (220, 38, 38)
-BLUE, GRAY = (37, 99, 235), (100, 100, 100)
+GREEN = (22, 163, 74)
 
 
-def _font(size):
-    for name in ("arialbd.ttf", "segoeuib.ttf", "arial.ttf"):
-        try:
-            return ImageFont.truetype(name, size)
-        except OSError:
-            continue
-    return ImageFont.load_default()
+def tray_icon(light_taskbar, alert=False):
+    """Bateria generica que contrasta con la barra; punto rojo si algun dispositivo esta bajo."""
+    from PySide6.QtCore import QRectF, Qt
+    from PySide6.QtGui import QColor, QIcon, QPainter, QPen, QPixmap
 
-
-def _level_color(pct):
-    if pct > 50:
-        return GREEN
-    if pct > 20:
-        return YELLOW
-    return RED
-
-
-def render(pct=None, charging=False):
-    """pct None = sin lectura (icono gris con '--')."""
-    if pct is None:
-        bg, text = GRAY, "--"
-    else:
-        bg, text = (BLUE if charging else _level_color(pct)), str(pct)
-    img = Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 0))
-    d = ImageDraw.Draw(img)
-    d.rounded_rectangle((0, 0, SIZE - 1, SIZE - 1), radius=12, fill=bg)
-    # Los iconos de la bandeja se ven a 16-32 px: el texto tiene que ocupar casi todo.
-    font = _font(46 if len(text) <= 2 else 32)
-    d.text((SIZE / 2, SIZE / 2 + 1), text, font=font, fill="white", anchor="mm")
-    return img
+    fg = QColor("#1b1b1b") if light_taskbar else QColor("#ffffff")
+    icon = QIcon()
+    for size in (16, 20, 24, 32, 48, 64):
+        pm = QPixmap(size, size)
+        pm.fill(Qt.transparent)
+        p = QPainter(pm)
+        p.setRenderHint(QPainter.Antialiasing)
+        s = size / 32  # todo se dibuja en una grilla de 32x32
+        stroke = max(1.0, 2.2 * s)
+        p.setPen(QPen(fg, stroke))
+        p.setBrush(Qt.NoBrush)
+        p.drawRoundedRect(QRectF(2 * s, 9 * s, 24 * s, 14 * s), 3 * s, 3 * s)
+        p.setPen(Qt.NoPen)
+        p.setBrush(fg)
+        p.drawRoundedRect(QRectF(27 * s, 13 * s, 3 * s, 6 * s), 1 * s, 1 * s)
+        for i in range(3):  # tres barras de carga
+            p.drawRoundedRect(QRectF((5.5 + i * 6.5) * s, 12.5 * s, 4.5 * s, 7 * s), 1 * s, 1 * s)
+        if alert:
+            r = 6.5 * s
+            p.setPen(QPen(QColor("#202020") if not light_taskbar else QColor("#f3f3f3"), 1.5 * s))
+            p.setBrush(QColor("#e81123"))
+            p.drawEllipse(QRectF(32 * s - 2 * r - 0.5, 0.5, 2 * r, 2 * r))
+        p.end()
+        icon.addPixmap(pm)
+    return icon
 
 
 def app_icon():

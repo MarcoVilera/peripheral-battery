@@ -58,5 +58,9 @@ Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: 
 Filename: "{app}\{#AppExe}"; Description: "Iniciar {#AppName}"; Flags: nowait postinstall skipifsilent
 Filename: "{app}\{#AppExe}"; Flags: nowait skipifnotsilent
 
+[UninstallDelete]
+; Datos de la app: log, ajustes y estadisticas de bateria.
+Type: filesandordirs; Name: "{localappdata}\PeripheralBattery"
+
 [UninstallRun]
 Filename: "{sys}\taskkill.exe"; Parameters: "/F /IM {#AppExe}"; Flags: runhidden; RunOnceId: "KillApp"
