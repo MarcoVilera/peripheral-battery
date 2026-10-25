@@ -27,6 +27,8 @@ $setup = "dist\PeripheralBattery-$version-setup.exe"
 Write-Host "Instalador: $setup"
 
 if ($Release) {
-    gh release create "v$version" $setup --title "v$version" --generate-notes
+    $gh = (Get-Command gh -EA SilentlyContinue).Source
+    if (-not $gh) { $gh = "$env:LOCALAPPDATA\Microsoft\WinGet\Links\gh.exe" }
+    & $gh release create "v$version" $setup --title "v$version" --generate-notes
     if ($LASTEXITCODE) { throw "gh release fallo" }
 }
